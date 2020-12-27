@@ -1,54 +1,73 @@
-import random
 import re
-import scrapy
-from datetime import datetime, timezone, date, timedelta
-from time import sleep
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import dateutil.parser
-from scrapy.exceptions import DropItem, CloseSpider
+import scrapy
+
+from movie import LastUpdate, db_connect
 
 
 class RutorSpider(scrapy.Spider):
     name = "rutor"
-    close_down_with_reason = None
+    start_urls = [
+        'http://rutor.info/browse/0/1/0/0',
+    ]
 
-    def start_requests(self):
-        # urls = [
-        #     'http://rutor.info/browse/0/1/0/0',
-        #     'http://rutor.info/browse/1/1/0/0',
-        #     'http://rutor.info/browse/2/1/0/0',
-        #     'http://rutor.info/browse/3/1/0/0',
-        #     'http://rutor.info/browse/4/1/0/0',
-        # ]
-        urls = []
+    def __init__(self, *args, **kwargs):
+        """
+        Initializes database connection
+        """
 
-        # range must be +1 to last page number
-        for url in range(12):
-            urls.append(scrapy.Request(url=f'http://rutor.info/browse/{url}/1/0/0', callback=self.parse))
+        super().__init__(*args, **kwargs)
 
-        return urls
+        self.session = db_connect()
+        print("**** RutorSpider: database connected ****")
+
+        self.last_update = self.session.query(LastUpdate).first().last_update
+        print(f"**** Last update: {self.last_update} ****")
+        self.last_seen_date = None
+
+        # self.file = open('A:\\movies.txt', mode='w', encoding='utf-8')
+
+    # def start_requests(self):
+    #     # urls = [
+    #     #     'http://rutor.info/browse/0/1/0/0',
+    #     #     'http://rutor.info/browse/1/1/0/0',
+    #     #     'http://rutor.info/browse/2/1/0/0',
+    #     #     'http://rutor.info/browse/3/1/0/0',
+    #     #     'http://rutor.info/browse/4/1/0/0',
+    #     # ]
+    #     urls = []
+    #
+    #     # range must be +1 to last page number
+    #     for url in range(12):
+    #         urls.append(scrapy.Request(url=f'http://rutor.info/browse/{url}/1/0/0', callback=self.parse))
+    #
+    #     return urls
 
     def parse(self, response):
         pattern = re.compile('.+ / ([^/]+) \((\\d{4})\).*')
+        is_this_last_page = False
 
         for download_article in response.xpath('//div[@id="index"]/table/tr[not(@class="backgr")]'):
             # print(download_article.get())
 
-            # if self.close_down_with_reason:
-            #     raise CloseSpider(reason=self.close_down_with_reason)
+            seen_date = download_article.xpath('./td[1]/text()').get()
+            seen_date = self.parse_date(seen_date)
+
+            if seen_date < self.last_update:
+                is_this_last_page = True
+                continue
 
             url = download_article.xpath('./td[2]/a[3]/@href').get()
             url = response.urljoin(url)
 
             title = download_article.xpath('./td[2]/a[3]/text()').get()
 
-            seen_date = download_article.xpath('./td[1]/text()').get()
-            seen_date = self.parse_date(seen_date)
-
             try:
                 movie_title, year = pattern.match(title).groups()
-                # sleep(random.uniform(0.0, 2.0))
+
                 yield {
                     'title': movie_title,
                     'year': year,
@@ -56,12 +75,15 @@ class RutorSpider(scrapy.Spider):
                     'seen_date': seen_date,
                 }
             except AttributeError:
-                print(title)
+                print(f'*** Something wrong during parsing movie: {title} ***')
 
-        # next_page = response.css('li.next a::attr(href)').get()
-        # if next_page is not None:
-        #     next_page = response.urljoin(next_page)
-        #     yield scrapy.Request(next_page, callback=self.parse)
+        # GO TO NEXT PAGE (IF NEEDED)
+        next_page = response.xpath('/html/body/div[2]/div[1]/p[2]/a[last()]/@href').get()
+        next_page = response.urljoin(next_page)
+        if not is_this_last_page and next_page is not None:
+            next_page = response.urljoin(next_page)
+            print(f'*** Going to the next page: {next_page} ***')
+            yield scrapy.Request(next_page, callback=self.parse)
 
     @staticmethod
     def parse_date(date_string: Optional[str]) -> Optional[datetime]:
