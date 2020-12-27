@@ -60,10 +60,12 @@ class MovieHunterPipeline:
             spider.session.commit()
 
             # write URL to file
-            self.file.write(item['url'])
-            self.file.write('\n')
+            rym_search_url = f'https://rateyourmusic.com/search?searchtype=F&searchterm={item["title"]} {item["year"]}'
+            self.file.writelines([
+                item['url'],
+                '\n',
+                rym_search_url.replace(' ', '%20'),
+                '\n',
+            ])
 
             return item
-            # session.close()
-
-        # return item
